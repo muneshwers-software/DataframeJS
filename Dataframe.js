@@ -18,9 +18,6 @@ class Dataframe {
       if (!Array.isArray(array)){
         throw new Error("Expected Input Array[][]")
       }
-      if (array.length == 0) {
-        throw new Error("input arrays cannot be empty")
-      }
     }
     const orientations = ['column', 'row']
     if (!orientations.includes(orientation)){
@@ -42,7 +39,8 @@ class Dataframe {
       */
       this.valueMap = new Map()
       for (let i = 0; i < tempArrays.length; i++) {
-        this.valueMap.set(tempHeaders[i], tempArrays[i].slice(1))
+        let amounttoslice = (headers) ? 1 : 0
+        this.valueMap.set(tempHeaders[i], tempArrays[i].slice(amounttoslice))
       }
 
     }
@@ -78,26 +76,39 @@ class Dataframe {
     }
   }
 
+
   /**
    * reads a google sheet and creates a Dataframe
    * 
    * @param {string} spreadsheetId - the id of the spreadsheet to read
    * @param {string=} sheetName - the name of the sheet to read
    * @param {boolean=} headers - true if the spreadsheet columns have header. true by default.
-   * 
+   * @param {Array<string>=} placeholder -  the placeholder headers if the sheet does not exist
    * @return {Dataframe} The corresponding Dataframe
    */
-  static readSheet(spreadsheetId, sheetName=null, headers=true) {
-    const arrays = sheetToCsv(spreadsheetId, sheetName)
-    return new Dataframe(arrays, headers, "row")
+  static readSheet(spreadsheetId, sheetName=null, headers=true, placeholder=null) {
+    try{
+      const arrays = sheetToCsv(spreadsheetId, sheetName)
+      if (arrays){
+        return new Dataframe(arrays, headers, "row")
+      }
+      return new Dataframe([placeholder], true, "row")
+    }catch (error){
+      Logger.log(error)
+      const spreadsheet = SpreadsheetApp.openById(spreadsheetId)
+      const sheet = spreadsheet.getSheetByName(sheetName)
+      if (!sheet){return new Dataframe([placeholder], true, "row")}
+      const values = sheet.getRange(1, 1, sheet.getLastRow(), sheet.getLastColumn()).getValues()
+      return new Dataframe(values, headers, "row")
+    }
+    
   }
 
   /**
    * reads a csv and creates a Dataframe
    * 
    * @param {string} csv - the csv to read
-   * @returns {Dataframe}
-   * 
+   * @return {Dataframe}
    */
   static readCSV(csv, headers=true){
     const arrays = Utilities.parseCsv(csv)
@@ -154,6 +165,7 @@ class Dataframe {
    * @param {string} spreadsheetId - Id of the spreadsheet to set Dataframe
    * @param {string=} sheetName - name of sheet to set Dataframe
    * @param {boolean=} clearSheet
+   * @return {void}
    */
   toSheet(spreadsheetId, sheetName='Dataframe sheet', clearSheet=false){
 
@@ -180,7 +192,7 @@ class Dataframe {
         sheet = spreadsheet.getActiveSheet().setName(sheetName)
       }
       sheet.getRange(1, 1, allrows.length, allrows[0].length).setValues(allrows)
-      return
+      return 
     }
   }
 
@@ -230,7 +242,7 @@ class Dataframe {
   * @memberof Dataframe
   * @instance
   * @param {Column|Array} column - A Column object or an array to set as a column in the DataFrame.
-  * @return {void} This method does not return anything.
+  * @return {Dataframe}
   */
   setColumn(column){
     if (column instanceof Column){
@@ -243,6 +255,7 @@ class Dataframe {
     else{
       throw new Error("Column | Array Input Expected")
     }
+    return this
   }
 
   /**
@@ -256,6 +269,19 @@ class Dataframe {
   */
   getRow(position){
     return new Row(this.values.map((array) => array[position]), this.headers)
+  }
+
+  /**
+   * Returns all the rows in the dataframe as a Row object
+   * 
+   * @method
+   * @memberof Dataframe
+   * @instance
+   * @return {Array<Row>}
+   */
+  getRows(){
+    let headers = this.headers
+    return this.arrows.map(r => new Row(r,headers))
   }
 
   /**
@@ -297,7 +323,7 @@ class Dataframe {
    * appends a row to the end of the Dataframe
    * 
    * @param {Row} row - the row to append at the end of the Dataframe
-   * @return {void}
+   * @return {Dataframe}
    */
   pushRow(row) {
     const headers = this.headers
@@ -315,6 +341,7 @@ class Dataframe {
       let column = this.getColumn(header)
       column.push(row.getValue(header))
     }
+    return this
   }
 
   /**
@@ -463,7 +490,7 @@ class Dataframe {
       }
     }
     /**
-    * A map that maps each header to its corresponding value.
+    * A map that maps each header to its corresponding value  
     * @type {Map<string, Array<any>>}
     */
     const newValMap = new Map()
@@ -744,8 +771,8 @@ class PivotTree {
    * @return {PivotTree}
    */
   addPivotValue(summary, columnName) {
-    if (this.columns.length == 0 || this.row.length == 0){
-      throw new Error("add the row group and column group to the pivot tree before setting value")
+    if (this.row.length == 0){
+      throw new Error("add the row group  to the pivot tree before setting value")
     }
     if (!(new Set(['count', 'counta', 'sum']).has(summary))) {
       throw new Error("incorrect summary value")
@@ -806,7 +833,7 @@ class PivotTree {
    * @param {string} spreadsheetId
    * @param {string=} sheetName
    * @param {boolean=} clearSheet - bool whether to delete clear the sheet then insert
-   * @return {void}
+   * @return {PivotTree}
    */
   toSheet(spreadsheetId, sheetName="Pivot Table", clearSheet=false ){
     const repTree = new RepTree(this)
@@ -823,7 +850,7 @@ class PivotTree {
       spreadsheet.insertSheet()
       sheet = spreadsheet.getActiveSheet().setName(sheetName)
       sheet.getRange(1, 1, pivotRows.length, pivotRows[0].length).setValues(pivotRows)
-      return
+      return this
     }
     else{
       if (!sheet){
@@ -831,7 +858,7 @@ class PivotTree {
         sheet = spreadsheet.getActiveSheet().setName(sheetName)
       }
       sheet.getRange(1, 1, pivotRows.length, pivotRows[0].length).setValues(pivotRows)
-      return
+      return  this
     }
 
   }
@@ -847,11 +874,11 @@ class PivotTree {
     let currentnode = this.root.child(row)
     for (let column of columns){
       currentnode = currentnode.child(column)
-      if (currentnode === null){
+      if (!currentnode){
         return null
       }   
     }
-    return currentnode.value
+    return currentnode?.value
   }
 
 }
@@ -1070,6 +1097,9 @@ function sheetToCsv(spreadsheetId, sheetName=null){
     sheetName = spreadsheet.getSheets()[0].getSheetName()
   }
   let sheet = spreadsheet.getSheetByName(sheetName);
+  if (!sheet){
+    return null
+  }
   let sheetNameId = sheet.getSheetId().toString();
 
   params= ssID+"/export?gid="+sheetNameId +"&format=csv"
@@ -1079,6 +1109,7 @@ function sheetToCsv(spreadsheetId, sheetName=null){
   return arrays
 
 } 
+
 
 
 /**
@@ -1202,12 +1233,13 @@ function pivotTreeUnitTest(){
     ['House', 'Rock', 'Rock', 'Rock', 'Water', 'Water', 'Water']
     ])
   let  pivotTree = dataFrame.createPivot()
-  pivotTree.
+  const value = pivotTree.
   addRowGroup('Names').
   addColumnGroup('House').
   addColumnGroup('Season').
   addPivotValue('sum', 'Points').
-  toSheet('134diA7aG1kh_F43a4Xw_CzITbqkTC23s6M6czMXrfKU', 'Pivot Test')
+  toSheet('134diA7aG1kh_F43a4Xw_CzITbqkTC23s6M6czMXrfKU', 'Pivot Test').find('Joe', 'Rock', 'Summer')
+  Logger.log(value)
 
 }
 
@@ -1218,6 +1250,9 @@ function pivotTreeUnitTest(){
 //fill nulls
 //drop rows with null
 //
+
+
+
 
 
 
