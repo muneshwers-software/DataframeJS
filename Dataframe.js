@@ -7,6 +7,7 @@ class Dataframe {
   * @param {boolean=} headers - Indicates whether the input array contains headers. Default is true.
   * @param {string=} orientation - The orientation of the arrays: "column" or "row". Default is "column".
   */
+
   constructor(arrays, headers=true, orientation='column'){
     if (!Array.isArray(arrays)) {
       throw new Error("Expected Input Array[][]")
@@ -52,8 +53,8 @@ class Dataframe {
           throw new Error("Data arrays larger than headers")
         }
       }
-
-      this.largestArrayLength = arrays.length
+      const offsetFromHeaderRow = 1
+      this.largestArrayLength = arrays.length - offsetFromHeaderRow
 
       let tempRowArrays = arrays.map((array) => array.concat(Array.from({"length": headersLength - array.length}, () => null)))
       if (headers){
@@ -210,6 +211,18 @@ class Dataframe {
   }
 
   /**
+   * returns the Dataframe as a blob
+   * @param {string} filename - the name of blob as a csv
+   * @return {Blob}
+   */
+  toBlob(filename){
+    const csv = this.toCsv()
+    const bytes = Utilities.newBlob(csv).getBytes()
+    const blob = Utilities.newBlob(bytes, 'application/octet-stream', `${filename}.csv`)
+    return blob
+  }
+
+  /**
   * Gets the column of the Dataframe under a header
   *
   * @param {string} header - the header name for the column
@@ -241,20 +254,26 @@ class Dataframe {
   * @method
   * @memberof Dataframe
   * @instance
-  * @param {Column|Array} column - A Column object or an array to set as a column in the DataFrame.
+  * @param {Column} column - A Column object or an array to set as a column in the DataFrame.
   * @return {Dataframe}
   */
   setColumn(column){
-    if (column instanceof Column){
-      this.valueMap.set(column.header, column.values)
-    }
-    else if (Array.isArray(column)){
-      const [header, ...values] = column
-      this.valueMap.set(header, values)
-    }
-    else{
+    if (!column instanceof Column){
       throw new Error("Column | Array Input Expected")
     }
+    let values = column.values
+    if (values.length < this.largestArrayLength){
+      values = values.concat(Array.from({"length": this.largestArrayLength - values.length}, () => null))
+    }
+    if (values.length > this.largestArrayLength){
+      this.largestArrayLength = values.length
+      for (let array of this.valueMap.values()){
+        for (let i = 0; i < this.largestArrayLength - array.length; i++){
+          array.push(null)
+        }
+      }
+    }
+    this.valueMap.set(column.header, values)
     return this
   }
 
@@ -341,6 +360,7 @@ class Dataframe {
       let column = this.getColumn(header)
       column.push(row.getValue(header))
     }
+    this.largestArrayLength = this.largestArrayLength + 1
     return this
   }
 
@@ -502,6 +522,114 @@ class Dataframe {
   }
 
   /**
+   * Returns a Dataframe that is a merge between this and the other dataframe via columns
+   * @param {Dataframe} dataframe - the dataframe to merge
+   * @return {Dataframe}
+   */
+  mergeColumns(dataframe){
+
+    if (!dataframe instanceof Dataframe){
+      throw new TypeError('Dataframe expected as input')
+    }
+    const headerSet = new Set(this.headers)
+    const dfHeaders = dataframe.headers
+    for (let header of dfHeaders){
+      headerSet.add(header)
+    }
+    const headers = Array.from(headerSet.values())
+
+    const newDf = new Dataframe([headers], true, 'row')
+
+    for (let header of headers){
+      try{
+        newDf.setColumn(
+          this.getColumn(header).
+          merge(dataframe.getColumn(header))
+        )
+      }catch{
+        try{
+          newDf.setColumn(
+            this.getColumn(header)
+          )
+        }
+        catch{
+          let bufferedValues = Array.from({"length": this.largestArrayLength}, () => null).
+          concat(
+            dataframe.getColumn(header).values
+          )
+          newDf.setColumn(
+            new Column(
+              bufferedValues,
+              header
+            )
+          )
+
+        }
+      }
+    }
+    return newDf
+
+  }
+
+  /**
+   * Returns a Dataframe that is a left merge between this and the other dataframe via rows
+   * @param {Dataframe} dataframe
+   * @param {string} on
+   * @return {Dataframe}
+   */
+  mergeRows(dataframe, on){
+    if (!dataframe instanceof Dataframe){
+      throw new TypeError("Expected Input Dataframe")
+    }
+    const headers = this.headers
+    const thisHeaders = headers.slice(0)
+    for (let header of dataframe.headers) {
+      if (header === on){
+        continue
+      }
+      let position = thisHeaders.findIndex((value) => value == header)
+      if (position >= 0){
+        headers[position] = headers[position] + " 1"
+        headers.push(header + " 2")  
+      }else {
+        headers.push(header)
+      }
+    }
+    const newdf = new Dataframe([headers], true, 'row')
+    const rows = this.getRows()
+    const dfrows = dataframe.getRows()
+    for (let row of rows){
+      const value = row.getValue(on)
+      for (let drow of dfrows){
+        if(drow.getValue(on) == value ){
+          newdf.pushRow(
+            new Row(
+              [...row.values,...drow.deleteValue(on).values], 
+              headers 
+            )
+          )
+        }
+      }
+    }
+    return newdf
+  }
+
+  /**
+   * find the first row where the column returns true from the callback function
+   * @param {function(any):boolean} callbackfn
+   * @param {string} header - the header for the column
+   * @return {Row}
+   */
+  find(callbackfn, header){
+    const column = this.getColumn(header)
+    const position = column.values.findIndex(callbackfn)
+    if (position < 0){
+      return null
+    }
+    return this.getRow(position)
+  }
+
+  /**
    * Create a pivot tree from the Dataframe
    */
   createPivot(){
@@ -545,9 +673,6 @@ class Row {
   */
   getValue(header){
     const value = this.map.get(header)
-    if (value == null || value == undefined){
-      throw new Error(`Column ${header} does not exist`)
-    }
     return value
   }
   /**
@@ -580,6 +705,20 @@ class Row {
   */
   get values() {
     return Array.from(this.map.values())
+  }
+
+  /**
+   * Returns a new row with the input value
+   * @param {string} header - header to remove from Row
+   * @return {Row}
+   */
+  deleteValue(header){
+    const newRow = new Row(
+      this.values,
+      this.headers
+    )
+    newRow.map.delete(header)
+    return newRow
   }
 
 }
@@ -659,6 +798,22 @@ class Column {
    */
   push(value){
     this.values.push(value)
+  }
+
+  /**
+   * Returns a column that is merged with this
+   * @param {Column} column - the column to merge
+   * @return {Column}
+   */
+  merge(column) {
+    if (!column instanceof Column){
+      throw new TypeError('Expected input as Column')
+    }
+    return new Column(
+      this.values.concat(column.values),
+      this.header
+    )
+
   }
 
 }
@@ -1130,7 +1285,7 @@ function areArraysEqual(arr1, arr2) {
         return false
       }
     }
-    else if (arr1[i] !== arr2[i]) {
+    else if (arr1[i] != arr2[i]) {
       return false;
     }
   }
@@ -1177,7 +1332,7 @@ function dataFrameUnitTests(){
   dataFrame.setColumn(colD)
   const setColD = dataFrame.getColumn('D')
   const row1 = dataFrame.getRow(0)
-  row1.setValue('A', 0)
+  row1.setValue('A', 20)
   dataFrame.setRow(0, row1)
   const newColA = dataFrame.getColumn('A')
   const newColAValues = newColA.values
@@ -1188,7 +1343,13 @@ function dataFrameUnitTests(){
   const twoColDataframeHeaders = twoColDataframe.headers
   twoColDataframe.pushRow(new Row([21, 68], ['A', 'B']))
   twoColDataframe.renameHeader(new Map().set("A","C"))
-  twoColDataframe.toSheet('134diA7aG1kh_F43a4Xw_CzITbqkTC23s6M6czMXrfKU', 'TwoColSheet')
+  twoColDataframe.toSheet('134diA7aG1kh_F43a4Xw_CzITbqkTC23s6M6czMXrfKU', 'TwoColSheet', )
+
+  const df1 = new Dataframe([['A', 'B', 'C'], [1, 2, 3], [4, 5, 6]], true, 'row')
+  const df2 = new Dataframe([['A', 'B', 'D'], [1, 7, 6]], true, 'row')
+  const mergedByColDf = df1.mergeColumns(df2)
+  const mergedByRowDf = df1.mergeRows(df2, 'A')
+
 
   const df = new Dataframe([['A', 3, 2, 1],['B', 4],['C', 5, 6, 7]])
   const sorteddf = df.sortRows((row1, row2) => row1.getValue('A') - row2.getValue('A'))
@@ -1206,10 +1367,10 @@ function dataFrameUnitTests(){
   status = (areArraysEqual([2, 4, 6], colDValues)) ? "Passed" : "Failed"
   Logger.log(`${status}: Column values map`)
 
-  status = (colD.values === setColD.values) ? "Passed" : "Failed"
+  status = (areArraysEqual(colD.values, setColD.values)) ? "Passed" : "Failed"
   Logger.log(`${status}: Dataframe set column`)
 
-  status = (areArraysEqual([0, 2, 3], newColAValues)) ? "Passed" : "Failed"
+  status = (areArraysEqual([20, 2, 3], newColAValues)) ? "Passed" : "Failed"
   Logger.log(`${status}: Dataframe get rows`)
   Logger.log(`${status}: Dataframe set rows`)
 
@@ -1222,6 +1383,14 @@ function dataFrameUnitTests(){
   status = (areArraysEqual(sorteddf.values, [[1,2,3],[null, null, 4], [7, 6, 5]])) ? "Passed" : "Failed"
   Logger.log(`${status}: Dataframe Sorting`)
   Logger.log(`${status}: Dataframe creation via row`)
+
+  status = (areArraysEqual([[1.0, 4.0, 2.0], [2.0, 5.0, 7.0], [3.0, 6.0, null], [null, null, 6.0]], mergedByColDf.values)) ? "Passed" : "Failed"
+  Logger.log(`${status}: Dataframe Column Merge`)
+  Logger.log(mergedByColDf.values)
+
+  Logger.log(mergedByRowDf.values)
+  Logger.log(mergedByRowDf.headers)
+
 
 }
 
@@ -1242,19 +1411,3 @@ function pivotTreeUnitTest(){
   Logger.log(value)
 
 }
-
-//TODO
-//be able to write styles
-//merge two dataframe
-//sql function?
-//fill nulls
-//drop rows with null
-//
-
-
-
-
-
-
-
-
